@@ -748,12 +748,13 @@ class Cpu(monagent.collector.checks.check.Check):
 
         When figures are not available, False is sent back.
         """
-        def format_results(us, sy, wa, idle, st):
+        def format_results(us, sy, wa, idle, st, trend=None):
             data = {'cpu.user_perc': us,
                     'cpu.system_perc': sy,
                     'cpu.wait_perc': wa,
                     'cpu.idle_perc': idle,
-                    'cpu.stolen_perc': st}
+                    'cpu.stolen_perc': st,
+                    'cpu.trend': trend}
             for key in data.keys():
                 if data[key] is None:
                     del data[key]
@@ -773,6 +774,13 @@ class Cpu(monagent.collector.checks.check.Check):
                 # FIXME return a float or False, would trigger type error if not python
                 self.logger.debug("Cannot extract cpu value %s from %s (%s)" % (name, data, legend))
                 return 0.0
+
+        def get_trend(cpu_loads_set):
+            #considering only the first and the last item to get the variation
+            trend = cpu_loads_set[-1] / cpu_loads_set[0]
+            # Trend > 1 means the utilization has grown
+            return trend - 1
+
 
         if monagent.common.util.Platform.is_linux():
             mpstat = sp.Popen(['mpstat', '1', '3'], stdout=sp.PIPE, close_fds=True).communicate()[0]
@@ -797,6 +805,7 @@ class Cpu(monagent.collector.checks.check.Check):
             lines = mpstat.split("\n")
             legend = [l for l in lines if "%usr" in l or "%user" in l]
             avg = [l for l in lines if "Average" in l]
+            full_data = [l.split() for l in lines if "Average" not in l and not ("%usr" in l or "%user" in l) and "Linux" not in l and l not in (" ","")]
             if len(legend) == 1 and len(avg) == 1:
                 headers = [h for h in legend[0].split() if h not in ("AM", "PM")]
                 data = avg[0].split()
@@ -807,6 +816,12 @@ class Cpu(monagent.collector.checks.check.Check):
                 cpu_metrics = {"%usr": None, "%user": None, "%nice": None,
                                "%iowait": None, "%idle": None, "%sys": None,
                                "%irq": None, "%soft": None, "%steal": None}
+
+                #Calculates the total utilization through 100 - idle
+                full_cpu_set = []
+                for l in full_data:
+                    idle = (get_value(headers, l, "%idle", filter_value=110))
+                    full_cpu_set.append(100-idle)
 
                 for cpu_m in cpu_metrics:
                     cpu_metrics[cpu_m] = get_value(headers, data, cpu_m, filter_value=110)
@@ -819,12 +834,14 @@ class Cpu(monagent.collector.checks.check.Check):
                 cpu_wait = cpu_metrics["%iowait"]
                 cpu_idle = cpu_metrics["%idle"]
                 cpu_stolen = cpu_metrics["%steal"]
+                trend = get_trend(full_cpu_set)
 
                 return format_results(cpu_user,
                                       cpu_system,
                                       cpu_wait,
                                       cpu_idle,
-                                      cpu_stolen)
+                                      cpu_stolen,
+                                      trend)
             else:
                 return {}
 
